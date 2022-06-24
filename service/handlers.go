@@ -27,7 +27,8 @@ import (
 
 // Represents a JWT token.
 type token struct {
-	Token string `json:"token"`
+	Token   string `json:"token"`
+	TokenID string `json:"token_id,omitempty"`
 }
 
 // Represents an error response.
@@ -486,9 +487,10 @@ func (h handler) getWorkflowLogStream(w http.ResponseWriter, r *http.Request) {
 }
 
 // Returns a new token
-func newCelloToken(provider, key, secret string) *token {
+func newCelloToken(provider, key, secret, secretIDAccessor string) *token {
 	return &token{
-		Token: fmt.Sprintf("%s:%s:%s", provider, key, secret),
+		Token:   fmt.Sprintf("%s:%s:%s", provider, key, secret),
+		TokenID: secretIDAccessor,
 	}
 }
 
@@ -562,7 +564,7 @@ func (h handler) createProject(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	level.Debug(l).Log("message", "creating project")
-	role, secret, err := cp.CreateProject(capp.Name)
+	role, secret, tokenID, err := cp.CreateProject(capp.Name)
 	if err != nil {
 		level.Error(l).Log("message", "error creating project", "error", err)
 		h.errorResponse(w, "error creating project", http.StatusInternalServerError)
@@ -570,7 +572,8 @@ func (h handler) createProject(w http.ResponseWriter, r *http.Request) {
 	}
 
 	level.Debug(l).Log("message", "retrieving Cello token")
-	t := newCelloToken("vault", role, secret)
+	// TODO: call DB token for accessor ID, needs to call vault with secret-id to get accessor??
+	t := newCelloToken("vault", role, secret, tokenID)
 	jsonResult, err := json.Marshal(t)
 	if err != nil {
 		level.Error(l).Log("message", "error serializing token", "error", err)
