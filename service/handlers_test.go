@@ -21,6 +21,7 @@ import (
 	"github.com/cello-proj/cello/service/internal/env"
 	"github.com/cello-proj/cello/service/internal/git"
 	"github.com/cello-proj/cello/service/internal/workflow"
+	th "github.com/cello-proj/cello/service/test/testhelpers"
 
 	"github.com/go-kit/log"
 	"github.com/stretchr/testify/assert"
@@ -50,6 +51,30 @@ func (d mockDB) CreateProjectEntry(ctx context.Context, pe db.ProjectEntry) erro
 	return nil
 }
 
+func (d mockDB) CreateTokenEntry(ctx context.Context, project string, secretAccessor string) (db.TokenEntry, error) {
+	if project == "tokendberror" {
+		return db.TokenEntry{}, fmt.Errorf("token db error")
+	}
+
+	return db.TokenEntry{}, nil
+}
+
+func (d mockDB) ListTokenEntries(ctx context.Context, project string) ([]db.TokenEntry, error) {
+	if project == projectDoesNotExist {
+		return []db.TokenEntry{}, upper.ErrNoMoreRows
+	}
+
+	if project == "projectreaderror" {
+		return []db.TokenEntry{}, errors.New("error reading DB")
+	}
+
+	if project == "projectlisttokenserror" {
+		return []db.TokenEntry{}, errors.New("error reading DB")
+	}
+
+	return []db.TokenEntry{}, upper.ErrNoMoreRows
+}
+
 func (d mockDB) ReadProjectEntry(ctx context.Context, project string) (db.ProjectEntry, error) {
 	if project == projectDoesNotExist {
 		return db.ProjectEntry{}, upper.ErrNoMoreRows
@@ -71,43 +96,11 @@ func (d mockDB) DeleteProjectEntry(ctx context.Context, project string) error {
 }
 
 func (d mockDB) DeleteTokenEntry(ctx context.Context, token string) error {
-	if token == "deletetokenerror" {
-		return errors.New("error deleting entry")
-	}
 	return nil
 }
 
-func (d mockDB) ListTokenEntries(ctx context.Context, project string) ([]db.TokenEntry, error) {
-	if project == projectDoesNotExist {
-		return []db.TokenEntry{}, upper.ErrNoMoreRows
-	}
-
-	if project == "projectreaderror" {
-		return []db.TokenEntry{}, errors.New("error reading DB")
-	}
-
-	if project == "projectlisttokenserror" {
-		return []db.TokenEntry{}, errors.New("error reading DB")
-	}
-
-	if project == "projectnotokens" {
-		return []db.TokenEntry{}, nil
-	}
-
-	return []db.TokenEntry{
-		{
-			CreatedAt: "2022-06-21T14:56:10.341066-07:00",
-			TokenID:   "ghi789",
-		},
-		{
-			CreatedAt: "2022-06-21T14:43:16.172896-07:00",
-			TokenID:   "def456",
-		},
-		{
-			CreatedAt: "2022-06-21T14:42:50.182037-07:00",
-			TokenID:   "abc123",
-		},
-	}, nil
+func (d mockDB) ReadTokenEntry(ctx context.Context, token string) (db.TokenEntry, error) {
+	return db.TokenEntry{}, nil
 }
 
 type mockGitClient struct{}
@@ -154,12 +147,24 @@ func newMockProvider(a credentials.Authorization, env env.Vars, h http.Header, f
 
 type mockCredentialsProvider struct{}
 
+func (m mockCredentialsProvider) DeleteProjectToken(projectName, tokenID string) error {
+	return nil
+}
+
+func (m mockCredentialsProvider) GetProjectToken(projectName, tokenID string) (types.ProjectToken, error) {
+	return types.ProjectToken{}, nil
+}
+
 func (m mockCredentialsProvider) GetToken() (string, error) {
 	return testPassword, nil
 }
 
 func (m mockCredentialsProvider) CreateProject(name string) (string, string, error) {
 	return "", "", nil
+}
+
+func (m mockCredentialsProvider) CreateToken(name string) (string, string, string, error) {
+	return "", "", "", nil
 }
 
 func (m mockCredentialsProvider) DeleteProject(name string) error {
@@ -218,6 +223,10 @@ func (m mockCredentialsProvider) ProjectExists(name string) (bool, error) {
 		"undeletableprojecttargets",
 		"undeletableproject",
 		"somedeletedberror",
+		"tokendberror",
+		"projectnotokens",
+		"projectreaderror",
+		"projectlisttokenserror",
 	}
 	for _, existingProjects := range existingProjects {
 		if name == existingProjects {
@@ -247,6 +256,8 @@ type test struct {
 	authHeader string
 	url        string
 	method     string
+	dbMock     *th.DBClientMock
+	cpMock     *th.CredsProviderMock
 }
 
 func TestCreateProject(t *testing.T) {
@@ -292,6 +303,48 @@ func TestCreateProject(t *testing.T) {
 			want:       http.StatusInternalServerError,
 			authHeader: adminAuthHeader,
 			url:        "/projects",
+			method:     "POST",
+		},
+	}
+	runTests(t, tests)
+}
+
+func TestCreateToken(t *testing.T) {
+	tests := []test{
+
+		{
+			name:       "can create token",
+			req:        loadJSON(t, "TestCreateToken/request.json"),
+			want:       http.StatusOK,
+			respFile:   "TestCreateToken/can_create_token_response.json",
+			authHeader: adminAuthHeader,
+			url:        "/projects/undeletableprojecttargets/tokens",
+			method:     "POST",
+		},
+		{
+			name:       "project does not exist",
+			req:        loadJSON(t, "TestCreateToken/request.json"),
+			want:       http.StatusNotFound,
+			respFile:   "TestCreateToken/project_does_not_exist.json",
+			authHeader: adminAuthHeader,
+			url:        "/projects/project1234/tokens",
+			method:     "POST",
+		},
+		{
+			name:       "fails to create token when not admin",
+			req:        loadJSON(t, "TestCreateToken/request.json"),
+			want:       http.StatusUnauthorized,
+			respFile:   "TestCreateToken/fails_to_create_token_when_not_admin_response.json",
+			authHeader: userAuthHeader,
+			url:        "/projects/undeletableprojecttargets/tokens",
+			method:     "POST",
+		},
+		{
+			name:       "token fails to create db entry",
+			req:        loadJSON(t, "TestCreateToken/request.json"),
+			want:       http.StatusInternalServerError,
+			authHeader: adminAuthHeader,
+			url:        "/projects/tokendberror/tokens",
 			method:     "POST",
 		},
 	}
@@ -752,22 +805,62 @@ func TestDeleteToken(t *testing.T) {
 			authHeader: adminAuthHeader,
 			url:        "/projects/project/tokens/existingtoken",
 			method:     "DELETE",
+			cpMock: &th.CredsProviderMock{
+				GetProjectTokenFunc: func(s1 string, s2 string) (types.ProjectToken, error) {
+					return types.ProjectToken{ID: "1234"}, nil
+				},
+				ProjectExistsFunc: func(s string) (bool, error) {
+					return true, nil
+				},
+				DeleteProjectTokenFunc: func(p, t string) error {
+					return nil
+				},
+			},
+			dbMock: &th.DBClientMock{
+				DeleteTokenEntryFunc: func(ctx context.Context, token string) error {
+					return nil
+				},
+				ReadProjectEntryFunc: func(ctx context.Context, project string) (db.ProjectEntry, error) {
+					return db.ProjectEntry{ProjectID: "project1"}, nil
+				},
+				ReadTokenEntryFunc: func(ctx context.Context, token string) (db.TokenEntry, error) {
+					return db.TokenEntry{ProjectID: "project1", TokenID: "1234", CreatedAt: "2022-06-21T14:42:50.182037-07:00"}, nil
+				},
+			},
 		},
 		{
 			name:       "project does not exist",
-			want:       http.StatusOK,
-			respFile:   "TestDeleteToken/can_delete_token_response.json",
+			want:       http.StatusNotFound,
+			respFile:   "TestDeleteToken/project_does_not_exist_response.json",
 			authHeader: adminAuthHeader,
 			url:        "/projects/projectdoesnotexist/tokens/tokendoesnotexist",
 			method:     "DELETE",
+			cpMock: &th.CredsProviderMock{
+				ProjectExistsFunc: func(s string) (bool, error) {
+					return false, nil
+				},
+			},
 		},
 		{
-			name:       "tokens does not exist",
-			want:       http.StatusOK,
-			respFile:   "TestDeleteToken/can_delete_token_response.json",
+			name:       "token does not exist",
+			want:       http.StatusNotFound,
+			respFile:   "TestDeleteToken/token_does_not_exist_response.json",
 			authHeader: adminAuthHeader,
 			url:        "/projects/project/tokens/tokendoesnotexist",
 			method:     "DELETE",
+			cpMock: &th.CredsProviderMock{
+				GetProjectTokenFunc: func(s1 string, s2 string) (types.ProjectToken, error) {
+					return types.ProjectToken{}, nil
+				},
+				ProjectExistsFunc: func(s string) (bool, error) {
+					return true, nil
+				},
+			},
+			dbMock: &th.DBClientMock{
+				ReadProjectEntryFunc: func(ctx context.Context, project string) (db.ProjectEntry, error) {
+					return db.ProjectEntry{ProjectID: "project1"}, nil
+				},
+			},
 		},
 		{
 			name:       "token delete error",
@@ -776,10 +869,33 @@ func TestDeleteToken(t *testing.T) {
 			authHeader: adminAuthHeader,
 			url:        "/projects/project/tokens/deletetokenerror",
 			method:     "DELETE",
+			cpMock: &th.CredsProviderMock{
+				DeleteProjectTokenFunc: func(s1, s2 string) error {
+					return errors.New("error deleting token from Vault")
+				},
+				GetProjectTokenFunc: func(s1 string, s2 string) (types.ProjectToken, error) {
+					return types.ProjectToken{ID: "1234"}, nil
+				},
+				ProjectExistsFunc: func(s string) (bool, error) {
+					return true, nil
+				},
+			},
+			dbMock: &th.DBClientMock{
+				DeleteTokenEntryFunc: func(ctx context.Context, token string) error {
+					return errors.New("error deleting entry from DB")
+				},
+				ReadProjectEntryFunc: func(ctx context.Context, project string) (db.ProjectEntry, error) {
+					return db.ProjectEntry{ProjectID: "project1"}, nil
+				},
+				ReadTokenEntryFunc: func(ctx context.Context, token string) (db.TokenEntry, error) {
+					return db.TokenEntry{ProjectID: "project1", TokenID: "1234", CreatedAt: "2022-06-21T14:42:50.182037-07:00"}, nil
+				},
+			},
 		},
 	}
-	runTests(t, tests)
+	runTestsV2(t, tests)
 }
+
 func TestListTokens(t *testing.T) {
 	tests := []test{
 		{
@@ -797,6 +913,27 @@ func TestListTokens(t *testing.T) {
 			authHeader: adminAuthHeader,
 			url:        "/projects/undeletableprojecttargets/tokens",
 			method:     "GET",
+			dbMock: &th.DBClientMock{
+				ReadProjectEntryFunc: func(ctx context.Context, p string) (db.ProjectEntry, error) {
+					return db.ProjectEntry{ProjectID: "project1", Repository: "repo"}, nil
+				},
+				ListTokenEntriesFunc: func(ctx context.Context, project string) ([]db.TokenEntry, error) {
+					return []db.TokenEntry{
+						{
+							CreatedAt: "2022-06-21T14:56:10.341066-07:00",
+							TokenID:   "ghi789",
+						},
+						{
+							CreatedAt: "2022-06-21T14:43:16.172896-07:00",
+							TokenID:   "def456",
+						},
+						{
+							CreatedAt: "2022-06-21T14:42:50.182037-07:00",
+							TokenID:   "abc123",
+						},
+					}, nil
+				},
+			},
 		},
 		{
 			name:       "project not found",
@@ -805,6 +942,11 @@ func TestListTokens(t *testing.T) {
 			authHeader: adminAuthHeader,
 			url:        "/projects/projectdoesnotexist/tokens",
 			method:     "GET",
+			dbMock: &th.DBClientMock{
+				ReadProjectEntryFunc: func(ctx context.Context, p string) (db.ProjectEntry, error) {
+					return db.ProjectEntry{}, upper.ErrNoMoreRows
+				},
+			},
 		},
 		{
 			name:       "no tokens",
@@ -813,6 +955,14 @@ func TestListTokens(t *testing.T) {
 			authHeader: adminAuthHeader,
 			url:        "/projects/projectnotokens/tokens",
 			method:     "GET",
+			dbMock: &th.DBClientMock{
+				ReadProjectEntryFunc: func(ctx context.Context, p string) (db.ProjectEntry, error) {
+					return db.ProjectEntry{ProjectID: "abc123", Repository: "repo"}, nil
+				},
+				ListTokenEntriesFunc: func(ctx context.Context, project string) ([]db.TokenEntry, error) {
+					return []db.TokenEntry{}, nil
+				},
+			},
 		},
 		{
 			name:       "project read error",
@@ -821,6 +971,11 @@ func TestListTokens(t *testing.T) {
 			authHeader: adminAuthHeader,
 			url:        "/projects/projectreaderror/tokens",
 			method:     "GET",
+			cpMock: &th.CredsProviderMock{
+				ProjectExistsFunc: func(s string) (bool, error) {
+					return false, errors.New("error retrieving project")
+				},
+			},
 		},
 		{
 			name:       "list tokens read error",
@@ -829,9 +984,17 @@ func TestListTokens(t *testing.T) {
 			authHeader: adminAuthHeader,
 			url:        "/projects/projectlisttokenserror/tokens",
 			method:     "GET",
+			dbMock: &th.DBClientMock{
+				ReadProjectEntryFunc: func(ctx context.Context, project string) (db.ProjectEntry, error) {
+					return db.ProjectEntry{ProjectID: "project1"}, nil
+				},
+				ListTokenEntriesFunc: func(ctx context.Context, project string) ([]db.TokenEntry, error) {
+					return []db.TokenEntry{}, errors.New("error from DB")
+				},
+			},
 		},
 	}
-	runTests(t, tests)
+	runTestsV2(t, tests)
 }
 
 func TestHealthCheck(t *testing.T) {
@@ -970,17 +1133,88 @@ func runTests(t *testing.T, tests []test) {
 
 				defer resp.Body.Close()
 
-				stringWantBody := string(wantBody)
-				stringBody := string(body)
+				bodyStr := string(body)
+				wantBodyStr := string(wantBody)
 
-				if stringWantBody == "" && stringBody == "" {
-					assert.Equal(t, stringWantBody, stringBody)
-				} else if stringWantBody == "" || stringBody == "" {
-					fmt.Println(stringBody)
-					fmt.Println(stringWantBody)
-					assert.Fail(t, "want and expected do not match")
+				if bodyStr == "" && wantBodyStr == "" {
+					assert.Equal(t, bodyStr, wantBodyStr)
 				} else {
-					assert.JSONEq(t, string(wantBody), string(body))
+					assert.JSONEq(t, bodyStr, wantBodyStr)
+				}
+			}
+		})
+	}
+}
+
+func runTestsV2(t *testing.T, tests []test) {
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			config, err := loadConfig(testConfigPath)
+			if err != nil {
+				panic(fmt.Sprintf("Unable to load config %s", err))
+			}
+
+			h := handler{
+				logger:                 log.NewNopLogger(),
+				newCredentialsProvider: newMockProvider,
+				argo:                   mockWorkflowSvc{},
+				argoCtx:                context.Background(),
+				config:                 config,
+				gitClient:              newMockGitClient(),
+				env: env.Vars{
+					AdminSecret: testPassword,
+				},
+				dbClient: newMockDB(),
+			}
+
+			if tt.dbMock != nil {
+				h.dbClient = tt.dbMock
+			}
+
+			if tt.cpMock != nil {
+				defaultCPFunc := func(a credentials.Authorization, env env.Vars, h http.Header, f credentials.VaultConfigFn, fn credentials.VaultSvcFn) (credentials.Provider, error) {
+					// TODO: probably best to create a base/default CP mock struct here
+					return tt.cpMock, nil
+				}
+
+				h.newCredentialsProvider = defaultCPFunc
+			}
+
+			resp := executeRequestWithHandler(h, tt.method, tt.url, serialize(tt.req), tt.authHeader)
+			if resp.StatusCode != tt.want {
+				t.Errorf("Unexpected status code %d", resp.StatusCode)
+			}
+
+			if tt.body != "" {
+				bodyBytes, err := ioutil.ReadAll(resp.Body)
+				defer resp.Body.Close()
+				if err != nil {
+					t.Errorf("Error loading body")
+				}
+				if tt.body != string(bodyBytes) {
+					t.Errorf("Unexpected body '%s', expected '%s'", bodyBytes, tt.body)
+				}
+			}
+
+			if tt.respFile != "" {
+				wantBody, err := loadFileBytes(tt.respFile)
+				if err != nil {
+					t.Fatalf("unable to read response file '%s', err: '%s'", tt.respFile, err)
+				}
+
+				body, err := io.ReadAll(resp.Body)
+				assert.Nil(t, err)
+
+				defer resp.Body.Close()
+
+				bodyStr := string(body)
+				wantBodyStr := string(wantBody)
+
+				// don't use assert.JSONEq for empty strings
+				if bodyStr == "" && wantBodyStr == "" {
+					assert.Equal(t, bodyStr, wantBodyStr)
+				} else {
+					assert.JSONEq(t, wantBodyStr, bodyStr)
 				}
 			}
 		})
@@ -1016,9 +1250,19 @@ func executeRequest(method string, url string, body *bytes.Buffer, authHeader st
 	return w.Result()
 }
 
+func executeRequestWithHandler(h handler, method string, url string, body *bytes.Buffer, authHeader string) *http.Response {
+	var router = setupRouter(h)
+	req, _ := http.NewRequest(method, url, serialize(body))
+
+	req.Header.Add("Authorization", authHeader)
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	return w.Result()
+}
+
 // loadFileBytes returns the contents of a file in the 'testdata' directory.
 func loadFileBytes(filename string) ([]byte, error) {
-	file := filepath.Join("testdata", filename)
+	file := filepath.Join("test/testdata", filename)
 	return os.ReadFile(file)
 }
 
