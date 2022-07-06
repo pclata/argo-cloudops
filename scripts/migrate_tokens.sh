@@ -42,6 +42,7 @@ for approle in $(echo "$approle_response" | jq -r '.[]'); do
 
 	exists=$(psql -h $PGHOST -p $PGPORT -d $PGDATABASE -U $PGUSER -w -t -c "SELECT EXISTS(SELECT project from projects where project='$project')")
 	if [ $exists == "f" ]; then
+		# due to a foreign key constraint, insert into Tokens table will fail if the project does not exist in the projects table 
 		echo "ERROR: Project does not exist in table: $project"
 		continue
 	fi
