@@ -4,9 +4,9 @@ package db
 
 import (
 	"context"
+	"strings"
 
 	"github.com/cello-proj/cello/internal/types"
-
 	"github.com/upper/db/v4"
 	"github.com/upper/db/v4/adapter/postgresql"
 )
@@ -54,13 +54,13 @@ const (
 	TokenEntryDB   = "tokens"
 )
 
-func NewSQLClient(host, database, user, password string, options map[string]string) (SQLClient, error) {
+func NewSQLClient(host, database, user, password, options string) (SQLClient, error) {
 	return SQLClient{
 		host:     host,
 		database: database,
 		user:     user,
 		password: password,
-		options: options,
+		options: 	optionsToMap(options),
 	}, nil
 }
 
@@ -185,4 +185,19 @@ func (d SQLClient) ListTokenEntries(ctx context.Context, project string) ([]Toke
 
 	err = sess.WithContext(ctx).Collection(TokenEntryDB).Find("project", project).OrderBy("-created_at").All(&res)
 	return res, err
+}
+
+func optionsToMap(options string) map[string]string {
+	opts := map[string]string{}
+	options = strings.TrimSpace(options)
+
+	if options != "" {
+		kvPairs := strings.Split(options, " ")
+		for _, entry := range kvPairs {
+			kv := strings.Split(entry, "=")
+			opts[kv[0]] = kv[1]
+		}
+	}
+	
+	return opts
 }
